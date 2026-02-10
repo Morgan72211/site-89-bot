@@ -1,3 +1,4 @@
+console.log("🚀 INDEX VERSION: 2026-02-09 A");
 require("dotenv").config();
 
 const {
