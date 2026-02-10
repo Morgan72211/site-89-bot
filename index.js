@@ -23,9 +23,9 @@ const {
 if (!process.env.TOKEN) throw new Error("TOKEN env var is missing. Add TOKEN in Railway Variables.");
 
 // ===== CONFIG (your IDs) =====
-const SSU_ALLOWED_ROLE_ID = "1453309078984982706";
+const SSU_ALLOWED_ROLE_ID = "1467674998893449402";
 const SSU_PING_ROLE_ID = "1464810149288869971";
-const SSUBEG_PING_ROLE_ID = "1453309078984982706";
+const SSUBEG_PING_ROLE_ID = "1467674998893449402";
 const SSUREVIVE_ROLE_ID = "1464810232189550683";
 
 // Lockdown channels
