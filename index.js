@@ -1,21 +1,26 @@
+// index.js (FULL) — ALL commands + Level-# permission system
 require("dotenv").config();
 
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const {
   Client,
   GatewayIntentBits,
   PermissionsBitField,
-  EmbedBuilder
+  EmbedBuilder,
 } = require("discord.js");
 
-// ====== CONFIG (your IDs you told me) ======
-const SSU_ALLOWED_ROLE_ID = "1453309078984982706";
-const SSU_PING_ROLE_ID    = "1464810149288869971";
-const SSUBEG_PING_ROLE_ID = "1453309078984982706";
-const SSUREVIVE_ROLE_ID   = "1464810232189550683";
+// ===== REQUIRED ENV =====
+if (!process.env.TOKEN) throw new Error("TOKEN env var is missing. Add TOKEN in Railway Variables.");
 
-// Lockdown channel IDs you gave:
+// ===== CONFIG (your IDs) =====
+const SSU_ALLOWED_ROLE_ID = "1453309078984982706";
+const SSU_PING_ROLE_ID = "1464810149288869971";
+const SSUBEG_PING_ROLE_ID = "1453309078984982706";
+const SSUREVIVE_ROLE_ID = "1464810232189550683";
+
+// Lockdown channels
 const LOCKDOWN_CHANNEL_IDS = [
   "1467681208359194776",
   "1467681285320478866",
@@ -31,6 +36,7 @@ const LOCKDOWN_CHANNEL_IDS = [
 const WARNINGS_FILE = path.join(__dirname, "warnings.json");
 const SSU_FILE = path.join(__dirname, "ssu.json");
 
+// ===== JSON HELPERS =====
 function loadJson(file, fallback) {
   try {
     if (!fs.existsSync(file)) return fallback;
@@ -40,72 +46,102 @@ function loadJson(file, fallback) {
     return fallback;
   }
 }
-
 function saveJson(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
 }
 
-// Ensure env
-if (!process.env.TOKEN) {
-  throw new Error("TOKEN env var is missing. Add TOKEN in Railway Variables.");
+// Ensure warnings structure exists
+function ensureWarningsFile() {
+  if (!fs.existsSync(WARNINGS_FILE)) saveJson(WARNINGS_FILE, { users: {} });
+}
+ensureWarningsFile();
+
+// ===== LEVEL SYSTEM (Level-# roles) =====
+function getHighestLevel(member) {
+  if (!member?.roles?.cache) return 0;
+
+  let highest = 0;
+
+  for (const role of member.roles.cache.values()) {
+    const name = role.name.trim();
+
+    // Matches: "Level-4", "Level-4 | Something", "LEVEL-10", etc
+    const match = name.match(/^Level-(\d+)\b/i);
+    if (!match) continue;
+
+    const lvl = Number(match[1]);
+    if (Number.isFinite(lvl)) highest = Math.max(highest, lvl);
+  }
+
+  return highest;
 }
 
-// Discord client
+function isLevelOrAbove(member, minLevel) {
+  return getHighestLevel(member) >= minLevel;
+}
+
+function hasRoleId(member, roleId) {
+  return member?.roles?.cache?.has(roleId) ?? false;
+}
+
+// ===== BOT =====
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-// L4+ check by role NAME starting with L4/L5 etc (ex: L4-Security Chief)
-function isL4Plus(member) {
-  if (!member?.roles?.cache) return false;
-  return member.roles.cache.some((role) => {
-    const name = role.name.toUpperCase().trim();
-    const match = name.match(/^L(\d+)\b/);
-    if (!match) return false;
-    const level = Number(match[1]);
-    return Number.isFinite(level) && level >= 4;
-  });
-}
-
-// Role ID checker
-function hasRoleId(member, roleId) {
-  return member?.roles?.cache?.has(roleId) ?? false;
+const startedAt = Date.now();
+function formatUptime(ms) {
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `${d}d ${h}h ${m}m ${sec}s`;
 }
 
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// ====== COMMAND HANDLER ======
+// ===== MAIN HANDLER =====
 client.on("interactionCreate", async (interaction) => {
   try {
     if (!interaction.isChatInputCommand()) return;
+    if (!interaction.inGuild()) {
+      return interaction.reply({ content: "❌ Use this in a server.", ephemeral: true });
+    }
 
     const cmd = interaction.commandName;
     console.log("✅ Command received:", cmd);
 
-    // ====== PUBLIC ======
+    // Defer fast for Railway/Discord lag safety
+    await interaction.deferReply({ ephemeral: true });
+
+    // ===== /status =====
     if (cmd === "status") {
       const embed = new EmbedBuilder()
         .setTitle("📡 Site-89 Status")
         .setDescription("Bot is online and responding.")
         .addFields(
           { name: "Ping", value: `${client.ws.ping}ms`, inline: true },
-          { name: "Server", value: interaction.guild?.name ?? "Unknown", inline: true }
+          { name: "Uptime", value: formatUptime(Date.now() - startedAt), inline: true },
+          { name: "Node", value: process.version, inline: true },
+          { name: "Memory", value: `${Math.round(process.memoryUsage().rss / 1024 / 1024)} MB`, inline: true },
+          { name: "Platform", value: `${os.platform()} ${os.arch()}`, inline: true }
         )
-        .setFooter({ text: "Site-89 Systems" })
         .setTimestamp();
 
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.editReply({ embeds: [embed] });
     }
 
+    // ===== /help =====
     if (cmd === "help") {
       const embed = new EmbedBuilder()
         .setTitle("🧾 Site-89 Bot Commands")
         .setDescription(
           [
-            "**Comms**: /announce, /intercom, /status",
-            "**Utility**: /help, /serverinfo",
+            "**Comms (Level-4+)**: /announce, /intercom",
+            "**Utility**: /help, /status, /serverinfo",
             "**Roles**: /addrole, /removerole",
             "**Moderation**: /kick, /ban, /timeout, /untimeout",
             "**Warnings**: /warn, /warnings, /unwarn, /editwarn, /clearwarns",
@@ -113,12 +149,13 @@ client.on("interactionCreate", async (interaction) => {
             "**SSU**: /ssu, /ssd, /ssupoll, /ssubeg, /ssurevive, /ssutakeover",
           ].join("\n")
         )
-        .setFooter({ text: "Tip: If a command is missing, re-run node deploy-commands.js" })
+        .setFooter({ text: 'Tip: If a command is missing, run: node deploy-commands.js' })
         .setTimestamp();
 
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.editReply({ embeds: [embed] });
     }
 
+    // ===== /serverinfo =====
     if (cmd === "serverinfo") {
       const g = interaction.guild;
       const embed = new EmbedBuilder()
@@ -126,22 +163,18 @@ client.on("interactionCreate", async (interaction) => {
         .addFields(
           { name: "Name", value: g?.name ?? "Unknown", inline: true },
           { name: "Members", value: `${g?.memberCount ?? "?"}`, inline: true },
+          { name: "Owner", value: `<@${g?.ownerId}>`, inline: true },
           { name: "ID", value: g?.id ?? "Unknown", inline: false }
         )
         .setTimestamp();
 
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.editReply({ embeds: [embed] });
     }
 
-    // ====== L4+ COMMS ======
+    // ===== /announce + /intercom (Level-4+) =====
     if (cmd === "announce" || cmd === "intercom") {
-      const member = interaction.member;
-
-      if (!isL4Plus(member)) {
-        return interaction.reply({
-          content: `❌ You must be **L4+** to use /${cmd}.`,
-          ephemeral: true,
-        });
+      if (!isLevelOrAbove(interaction.member, 4)) {
+        return interaction.editReply(`❌ You must be **Level-4+** to use /${cmd}.`);
       }
 
       const msg = interaction.options.getString("message", true);
@@ -153,118 +186,119 @@ client.on("interactionCreate", async (interaction) => {
         .setTimestamp();
 
       await interaction.channel.send({ embeds: [embed] });
-      return interaction.reply({ content: `✅ ${cmd} sent.`, ephemeral: true });
+      return interaction.editReply(`✅ ${cmd} sent.`);
     }
 
-    // ====== ROLE MANAGEMENT ======
+    // ===== /addrole /removerole =====
     if (cmd === "addrole" || cmd === "removerole") {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageRoles)) {
-        return interaction.reply({
-          content: "❌ You need **Manage Roles** permission.",
-          ephemeral: true,
-        });
+        return interaction.editReply("❌ You need **Manage Roles** permission.");
       }
 
       const user = interaction.options.getUser("user", true);
       const role = interaction.options.getRole("role", true);
       const member = await interaction.guild.members.fetch(user.id);
 
-      // Safety: don’t allow editing roles higher/equal than bot’s top role
       const botMember = await interaction.guild.members.fetchMe();
       if (role.position >= botMember.roles.highest.position) {
-        return interaction.reply({
-          content: "❌ I can’t manage that role (it is higher than or equal to my top role).",
-          ephemeral: true,
-        });
+        return interaction.editReply("❌ I can’t manage that role (it’s higher than or equal to my top role).");
       }
 
       if (cmd === "addrole") await member.roles.add(role);
       else await member.roles.remove(role);
 
-      return interaction.reply({
-        content: `✅ ${cmd === "addrole" ? "Added" : "Removed"} ${role} ${cmd === "addrole" ? "to" : "from"} ${member}.`,
-        ephemeral: true,
-      });
+      return interaction.editReply(
+        `✅ ${cmd === "addrole" ? "Added" : "Removed"} ${role} ${cmd === "addrole" ? "to" : "from"} ${member}.`
+      );
     }
 
-    // ====== MODERATION ======
+    // ===== /kick =====
     if (cmd === "kick") {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.KickMembers)) {
-        return interaction.reply({ content: "❌ You need **Kick Members** permission.", ephemeral: true });
+        return interaction.editReply("❌ You need **Kick Members** permission.");
       }
+
       const user = interaction.options.getUser("user", true);
       const reason = interaction.options.getString("reason") || "No reason provided";
       const member = await interaction.guild.members.fetch(user.id).catch(() => null);
 
-      if (!member) return interaction.reply({ content: "❌ That user is not in this server.", ephemeral: true });
-      if (!member.kickable) return interaction.reply({ content: "❌ I can’t kick that user.", ephemeral: true });
+      if (!member) return interaction.editReply("❌ That user is not in this server.");
+      if (!member.kickable) return interaction.editReply("❌ I can’t kick that user (role hierarchy).");
 
       await member.kick(reason);
-      return interaction.reply({ content: `✅ Kicked **${user.tag}**. Reason: ${reason}`, ephemeral: true });
+      return interaction.editReply(`✅ Kicked **${user.tag}**. Reason: ${reason}`);
     }
 
+    // ===== /ban =====
     if (cmd === "ban") {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.BanMembers)) {
-        return interaction.reply({ content: "❌ You need **Ban Members** permission.", ephemeral: true });
+        return interaction.editReply("❌ You need **Ban Members** permission.");
       }
+
       const user = interaction.options.getUser("user", true);
       const reason = interaction.options.getString("reason") || "No reason provided";
       const deleteDays = interaction.options.getInteger("delete_days") ?? 0;
 
-      await interaction.guild.members.ban(user.id, { reason, deleteMessageSeconds: deleteDays * 86400 });
-      return interaction.reply({
-        content: `✅ Banned **${user.tag}**. Deleted ${deleteDays} day(s) of messages. Reason: ${reason}`,
-        ephemeral: true,
+      await interaction.guild.members.ban(user.id, {
+        reason,
+        deleteMessageSeconds: deleteDays * 86400,
       });
+
+      return interaction.editReply(
+        `✅ Banned **${user.tag}**. Deleted ${deleteDays} day(s) of messages. Reason: ${reason}`
+      );
     }
 
+    // ===== /timeout =====
     if (cmd === "timeout") {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ModerateMembers)) {
-        return interaction.reply({ content: "❌ You need **Moderate Members** permission.", ephemeral: true });
+        return interaction.editReply("❌ You need **Moderate Members** permission.");
       }
+
       const user = interaction.options.getUser("user", true);
       const minutes = interaction.options.getInteger("minutes", true);
       const reason = interaction.options.getString("reason") || "No reason provided";
       const member = await interaction.guild.members.fetch(user.id).catch(() => null);
 
-      if (!member) return interaction.reply({ content: "❌ That user is not in this server.", ephemeral: true });
-      const ms = minutes * 60 * 1000;
+      if (!member) return interaction.editReply("❌ That user is not in this server.");
 
-      await member.timeout(ms, reason);
-      return interaction.reply({ content: `✅ Timed out **${user.tag}** for ${minutes} minute(s). Reason: ${reason}`, ephemeral: true });
+      await member.timeout(minutes * 60 * 1000, reason);
+      return interaction.editReply(`✅ Timed out **${user.tag}** for ${minutes} minute(s). Reason: ${reason}`);
     }
 
+    // ===== /untimeout =====
     if (cmd === "untimeout") {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ModerateMembers)) {
-        return interaction.reply({ content: "❌ You need **Moderate Members** permission.", ephemeral: true });
+        return interaction.editReply("❌ You need **Moderate Members** permission.");
       }
+
       const user = interaction.options.getUser("user", true);
       const reason = interaction.options.getString("reason") || "No reason provided";
       const member = await interaction.guild.members.fetch(user.id).catch(() => null);
 
-      if (!member) return interaction.reply({ content: "❌ That user is not in this server.", ephemeral: true });
+      if (!member) return interaction.editReply("❌ That user is not in this server.");
 
       await member.timeout(null, reason);
-      return interaction.reply({ content: `✅ Removed timeout from **${user.tag}**. Reason: ${reason}`, ephemeral: true });
+      return interaction.editReply(`✅ Removed timeout from **${user.tag}**. Reason: ${reason}`);
     }
 
-    // ====== WARN SYSTEM (JSON) ======
+    // ===== WARNINGS SYSTEM (JSON) =====
     const warningsDb = loadJson(WARNINGS_FILE, { users: {} });
 
     function getUserWarns(userId) {
       if (!warningsDb.users[userId]) warningsDb.users[userId] = [];
       return warningsDb.users[userId];
     }
-
     function nextWarnId(warns) {
       let max = 0;
       for (const w of warns) max = Math.max(max, w.id || 0);
       return max + 1;
     }
 
+    // Permission gate for warn commands
     if (["warn", "warnings", "unwarn", "editwarn", "clearwarns"].includes(cmd)) {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ModerateMembers)) {
-        return interaction.reply({ content: "❌ You need **Moderate Members** permission.", ephemeral: true });
+        return interaction.editReply("❌ You need **Moderate Members** permission.");
       }
     }
 
@@ -275,35 +309,22 @@ client.on("interactionCreate", async (interaction) => {
       const warns = getUserWarns(user.id);
       const id = nextWarnId(warns);
 
-      warns.push({
-        id,
-        reason,
-        modId: interaction.user.id,
-        time: Date.now(),
-      });
-
+      warns.push({ id, reason, modId: interaction.user.id, time: Date.now() });
       saveJson(WARNINGS_FILE, warningsDb);
 
-      return interaction.reply({
-        content: `✅ Warned **${user.tag}**.\n**Warn ID:** ${id}\n**Reason:** ${reason}`,
-        ephemeral: true,
-      });
+      return interaction.editReply(`✅ Warned **${user.tag}**.\n**Warn ID:** ${id}\n**Reason:** ${reason}`);
     }
 
     if (cmd === "warnings") {
       const user = interaction.options.getUser("user", true);
       const warns = getUserWarns(user.id);
 
-      if (warns.length === 0) {
-        return interaction.reply({ content: `✅ **${user.tag}** has no warnings.`, ephemeral: true });
-      }
+      if (warns.length === 0) return interaction.editReply(`✅ **${user.tag}** has no warnings.`);
 
-      const lines = warns
-        .slice(-15)
-        .map(w => {
-          const date = new Date(w.time).toLocaleString();
-          return `**#${w.id}** — ${w.reason} *(by <@${w.modId}>, ${date})*`;
-        });
+      const lines = warns.slice(-15).map((w) => {
+        const date = new Date(w.time).toLocaleString();
+        return `**#${w.id}** — ${w.reason} *(by <@${w.modId}>, ${date})*`;
+      });
 
       const embed = new EmbedBuilder()
         .setTitle(`⚠️ Warnings for ${user.tag}`)
@@ -311,7 +332,7 @@ client.on("interactionCreate", async (interaction) => {
         .setFooter({ text: `Showing last ${Math.min(15, warns.length)} warning(s)` })
         .setTimestamp();
 
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.editReply({ embeds: [embed] });
     }
 
     if (cmd === "unwarn") {
@@ -319,19 +340,14 @@ client.on("interactionCreate", async (interaction) => {
       const warnId = interaction.options.getInteger("warn_id", true);
 
       const warns = getUserWarns(user.id);
-      const idx = warns.findIndex(w => w.id === warnId);
+      const idx = warns.findIndex((w) => w.id === warnId);
 
-      if (idx === -1) {
-        return interaction.reply({ content: `❌ No warning found with ID **${warnId}** for ${user.tag}.`, ephemeral: true });
-      }
+      if (idx === -1) return interaction.editReply(`❌ No warning found with ID **${warnId}** for ${user.tag}.`);
 
-      const removed = warns.splice(idx, 1)[0];
+      warns.splice(idx, 1);
       saveJson(WARNINGS_FILE, warningsDb);
 
-      return interaction.reply({
-        content: `✅ Removed warning **#${removed.id}** from **${user.tag}**.`,
-        ephemeral: true,
-      });
+      return interaction.editReply(`✅ Removed warning **#${warnId}** from **${user.tag}**.`);
     }
 
     if (cmd === "editwarn") {
@@ -340,19 +356,14 @@ client.on("interactionCreate", async (interaction) => {
       const newReason = interaction.options.getString("reason", true);
 
       const warns = getUserWarns(user.id);
-      const w = warns.find(x => x.id === warnId);
+      const w = warns.find((x) => x.id === warnId);
 
-      if (!w) {
-        return interaction.reply({ content: `❌ No warning found with ID **${warnId}** for ${user.tag}.`, ephemeral: true });
-      }
+      if (!w) return interaction.editReply(`❌ No warning found with ID **${warnId}** for ${user.tag}.`);
 
       w.reason = newReason;
       saveJson(WARNINGS_FILE, warningsDb);
 
-      return interaction.reply({
-        content: `✅ Edited warning **#${warnId}** for **${user.tag}**.\nNew reason: ${newReason}`,
-        ephemeral: true,
-      });
+      return interaction.editReply(`✅ Edited warning **#${warnId}** for **${user.tag}**.\nNew reason: ${newReason}`);
     }
 
     if (cmd === "clearwarns") {
@@ -360,20 +371,19 @@ client.on("interactionCreate", async (interaction) => {
       warningsDb.users[user.id] = [];
       saveJson(WARNINGS_FILE, warningsDb);
 
-      return interaction.reply({ content: `✅ Cleared all warnings for **${user.tag}**.`, ephemeral: true });
+      return interaction.editReply(`✅ Cleared all warnings for **${user.tag}**.`);
     }
 
-    // ====== LOCKDOWN ======
+    // ===== LOCKDOWN =====
     if (cmd === "lockdown" || cmd === "unlockdown") {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageChannels)) {
-        return interaction.reply({ content: "❌ You need **Manage Channels** permission.", ephemeral: true });
+        return interaction.editReply("❌ You need **Manage Channels** permission.");
       }
 
       const reason = interaction.options.getString("reason") || "No reason provided";
       const everyone = interaction.guild.roles.everyone;
 
       let changed = 0;
-
       for (const channelId of LOCKDOWN_CHANNEL_IDS) {
         const ch = await interaction.guild.channels.fetch(channelId).catch(() => null);
         if (!ch) continue;
@@ -381,27 +391,20 @@ client.on("interactionCreate", async (interaction) => {
         if (cmd === "lockdown") {
           await ch.permissionOverwrites.edit(everyone, { SendMessages: false }).catch(() => null);
         } else {
-          // Remove our overwrite for SendMessages
           await ch.permissionOverwrites.edit(everyone, { SendMessages: null }).catch(() => null);
         }
         changed++;
       }
 
-      return interaction.reply({
-        content: `✅ ${cmd === "lockdown" ? "Locked" : "Unlocked"} **${changed}** channel(s).\nReason: ${reason}`,
-        ephemeral: true,
-      });
+      return interaction.editReply(
+        `✅ ${cmd === "lockdown" ? "Locked" : "Unlocked"} **${changed}** channel(s).\nReason: ${reason}`
+      );
     }
 
-    // ====== SSU SYSTEM ======
-    // Allowed role needed for SSU/SSD/SSUPOLL/SSUTAKEOVER
+    // ===== SSU PERMISSION (allowed role ID) =====
     if (["ssu", "ssd", "ssupoll", "ssutakeover"].includes(cmd)) {
-      const member = interaction.member;
-      if (!hasRoleId(member, SSU_ALLOWED_ROLE_ID)) {
-        return interaction.reply({
-          content: "❌ You are not allowed to use this SSU command.",
-          ephemeral: true,
-        });
+      if (!hasRoleId(interaction.member, SSU_ALLOWED_ROLE_ID)) {
+        return interaction.editReply("❌ You are not allowed to use this SSU command.");
       }
     }
 
@@ -410,22 +413,20 @@ client.on("interactionCreate", async (interaction) => {
         .setTitle("🚨 Server Start Up")
         .setDescription(
           `A Server Start Up has been hosted by **${interaction.user}**!\n` +
-          `Please join to roleplay and have fun!\n\n` +
-          `**How to join:**\n` +
-          `> Join the SCP: Roleplay game\n` +
-          `> Press "Custom Servers"\n` +
-          `> Search, "Site-44" in the search bar\n` +
-          `> Press Join!`
+            `Please join to roleplay and have fun!\n\n` +
+            `**How to join:**\n` +
+            `> Join the SCP: Roleplay game\n` +
+            `> Press "Custom Servers"\n` +
+            `> Search, "Site-44" in the search bar\n` +
+            `> Press Join!`
         )
         .setTimestamp();
 
       const ping = `<@&${SSU_PING_ROLE_ID}>`;
       const msg = await interaction.channel.send({ content: ping, embeds: [embed] });
 
-      // Save last SSU message for takeover edits
       saveJson(SSU_FILE, { channelId: msg.channel.id, messageId: msg.id });
-
-      return interaction.reply({ content: "✅ SSU posted.", ephemeral: true });
+      return interaction.editReply("✅ SSU posted.");
     }
 
     if (cmd === "ssd") {
@@ -433,13 +434,13 @@ client.on("interactionCreate", async (interaction) => {
         .setTitle("🛑 Server Shutdown")
         .setDescription(
           `Unfortunately, the Server Start-up has shut down.\n` +
-          `Don't worry! There will always be another SSU soon!\n` +
-          `Feel free to go the SSU beg channel to ask for an SSU!`
+            `Don't worry! There will always be another SSU soon!\n` +
+            `Feel free to go the SSU beg channel to ask for an SSU!`
         )
         .setTimestamp();
 
       await interaction.channel.send({ embeds: [embed] });
-      return interaction.reply({ content: "✅ SSD posted.", ephemeral: true });
+      return interaction.editReply("✅ SSD posted.");
     }
 
     if (cmd === "ssupoll") {
@@ -453,70 +454,63 @@ client.on("interactionCreate", async (interaction) => {
       await m.react("✅");
       await m.react("❌");
 
-      return interaction.reply({ content: "✅ SSU poll posted.", ephemeral: true });
+      return interaction.editReply("✅ SSU poll posted.");
     }
 
     if (cmd === "ssubeg") {
       const ping = `<@&${SSUBEG_PING_ROLE_ID}>`;
-      await interaction.channel.send({
-        content: `${ping} **${interaction.user}** is requesting an SSU!`,
-      });
-      return interaction.reply({ content: "✅ SSU beg sent.", ephemeral: true });
+      await interaction.channel.send({ content: `${ping} **${interaction.user}** is requesting an SSU!` });
+      return interaction.editReply("✅ SSU beg sent.");
     }
 
     if (cmd === "ssurevive") {
       const ping = `<@&${SSUREVIVE_ROLE_ID}>`;
-      await interaction.channel.send({
-        content: `${ping} **${interaction.user}** is calling for an SSU revive!`,
-      });
-      return interaction.reply({ content: "✅ SSU revive ping sent.", ephemeral: true });
+      await interaction.channel.send({ content: `${ping} **${interaction.user}** is calling for an SSU revive!` });
+      return interaction.editReply("✅ SSU revive ping sent.");
     }
 
     if (cmd === "ssutakeover") {
       const last = loadJson(SSU_FILE, null);
       if (!last?.channelId || !last?.messageId) {
-        return interaction.reply({ content: "❌ No SSU message saved yet. Use /ssu first.", ephemeral: true });
+        return interaction.editReply("❌ No SSU message saved yet. Use /ssu first.");
       }
 
       const ch = await interaction.guild.channels.fetch(last.channelId).catch(() => null);
-      if (!ch) return interaction.reply({ content: "❌ Could not find the SSU channel.", ephemeral: true });
+      if (!ch) return interaction.editReply("❌ Could not find the SSU channel.");
 
       const msg = await ch.messages.fetch(last.messageId).catch(() => null);
-      if (!msg) return interaction.reply({ content: "❌ Could not find the last SSU message.", ephemeral: true });
+      if (!msg) return interaction.editReply("❌ Could not find the last SSU message.");
 
       const oldEmbed = msg.embeds?.[0];
-      if (!oldEmbed) return interaction.reply({ content: "❌ Last SSU message has no embed.", ephemeral: true });
+      if (!oldEmbed) return interaction.editReply("❌ Last SSU message has no embed.");
 
       const newEmbed = EmbedBuilder.from(oldEmbed)
         .setDescription(
           `A Server Start Up has been hosted by **${interaction.user}**!\n` +
-          `Please join to roleplay and have fun!\n\n` +
-          `**How to join:**\n` +
-          `> Join the SCP: Roleplay game\n` +
-          `> Press "Custom Servers"\n` +
-          `> Search, "Site-44" in the search bar\n` +
-          `> Press Join!`
+            `Please join to roleplay and have fun!\n\n` +
+            `**How to join:**\n` +
+            `> Join the SCP: Roleplay game\n` +
+            `> Press "Custom Servers"\n` +
+            `> Search, "Site-44" in the search bar\n` +
+            `> Press Join!`
         )
         .setTimestamp();
 
       await msg.edit({ embeds: [newEmbed] });
-
-      return interaction.reply({ content: "✅ SSU takeover complete. Embed updated.", ephemeral: true });
+      return interaction.editReply("✅ SSU takeover complete. Embed updated.");
     }
 
-    // ====== FALLBACK ======
-    return interaction.reply({
-      content: "❌ Command not handled in index.js (paste the correct file).",
-      ephemeral: true,
-    });
-
+    // ===== FALLBACK =====
+    return interaction.editReply("❌ Command not handled in index.js (wrong file running).");
   } catch (err) {
     console.error("Command error:", err);
-    if (interaction?.isRepliable()) {
-      try {
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply("❌ Something went wrong running that command.");
+      } else {
         await interaction.reply({ content: "❌ Something went wrong running that command.", ephemeral: true });
-      } catch {}
-    }
+      }
+    } catch {}
   }
 });
 
