@@ -425,7 +425,7 @@ client.on("interactionCreate", async (interaction) => {
             `**How to join:**\n` +
             `> Join the SCP: Roleplay game\n` +
             `> Press "Custom Servers"\n` +
-            `> Search, "Site-44" in the search bar\n` +
+            `> Search, "Site - 89" in the search bar\n` +
             `> Press Join!`
         )
         .setTimestamp();
