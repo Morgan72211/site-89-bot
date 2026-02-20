@@ -1,5 +1,4 @@
 console.log("🚀 RUNNING INDEX VERSION: FULL-BOT-LEVEL-2026-02-09");
-// index.js (FULL) — ALL commands + Level-# permission system
 require("dotenv").config();
 process.on("unhandledRejection", err => {
   console.error("❌ UNHANDLED PROMISE:", err);
